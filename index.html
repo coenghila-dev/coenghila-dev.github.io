@@ -242,7 +242,7 @@
        ========================================================================== */
     .hero-scroll-track {
       position: relative;
-      height: 250vh; /* 100vh viewport stage + 150vh scrub scroll distance */
+      height: 180vh; /* 100vh viewport stage + 80vh scrub scroll distance */
       background-color: var(--hero-bg);
     }
 
@@ -328,6 +328,14 @@
       display: flex;
       justify-content: center;
       align-items: center;
+      background-color: transparent;
+      /* Bulletproof mask on wrapper for iOS Safari hardware video layer */
+      -webkit-mask-image: url('assets/hero_mask.png');
+      mask-image: url('assets/hero_mask.png');
+      -webkit-mask-size: 100% 100%;
+      mask-size: 100% 100%;
+      -webkit-mask-repeat: no-repeat;
+      mask-repeat: no-repeat;
     }
 
     /* Completely blend into #D8E5D3 without any border, box, or glow */
@@ -340,15 +348,13 @@
       outline: none;
       border: none;
       box-shadow: none;
-      /* Soft boundary mask: dissolves all 4 outer video edges completely into #D8E5D3 canvas with zero line artifacts */
-      -webkit-mask-image:
-        linear-gradient(to right, transparent 0%, #000 12%, #000 84%, transparent 98%),
-        linear-gradient(to bottom, transparent 0%, #000 4%, #000 86%, transparent 98%);
-      mask-image:
-        linear-gradient(to right, transparent 0%, #000 12%, #000 84%, transparent 98%),
-        linear-gradient(to bottom, transparent 0%, #000 4%, #000 86%, transparent 98%);
-      -webkit-mask-composite: source-in;
-      mask-composite: intersect;
+      /* Soft boundary mask: dissolves all 4 outer edges completely into #D8E5D3 */
+      -webkit-mask-image: url('assets/hero_mask.png');
+      mask-image: url('assets/hero_mask.png');
+      -webkit-mask-size: 100% 100%;
+      mask-size: 100% 100%;
+      -webkit-mask-repeat: no-repeat;
+      mask-repeat: no-repeat;
     }
 
     /* Speech Bubble anchored beside the avatar's head */
@@ -1297,6 +1303,7 @@
             id="avatar-video"
             class="avatar-video"
             src="assets/wave_scrub.mp4"
+            poster="assets/avatar.jpg"
             muted
             playsinline
             webkit-playsinline
@@ -2362,42 +2369,86 @@
       } catch (e) {}
     }
 
-    // --- SCROLL SCRUBBING AVATAR VIDEO (Sticky 150vh Track) ---
+    // --- SCROLL SCRUBBING AVATAR VIDEO (Sticky 80vh Track, iOS Safari Optimized) ---
     const video = document.getElementById('avatar-video');
     const fallback = document.getElementById('avatar-fallback');
     const heroTrack = document.getElementById('hero-track');
     const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    if (prefersReducedMotion) {
+    function showFallback() {
       if (video) video.style.display = 'none';
       if (fallback) fallback.style.display = 'block';
+    }
+
+    if (prefersReducedMotion) {
+      showFallback();
     } else if (video) {
       let isVideoReady = false;
       let targetProgress = 0;
       let currentProgress = 0;
+      let hasWarmedUp = false;
+
+      // Unlock / warm up video decoder on iOS Safari (allowed because muted & playsinline)
+      function warmupVideo() {
+        if (hasWarmedUp) return;
+        hasWarmedUp = true;
+        try {
+          const playPromise = video.play();
+          if (playPromise !== undefined) {
+            playPromise.then(() => {
+              video.pause();
+              isVideoReady = true;
+              onScroll();
+            }).catch(() => {
+              // May require first touch or scroll in strict low-power mode
+              hasWarmedUp = false;
+            });
+          }
+        } catch (e) {
+          hasWarmedUp = false;
+        }
+      }
 
       function initVideo() {
         if (isVideoReady) return;
         isVideoReady = true;
         video.pause();
-        video.currentTime = 0;
         onScroll();
       }
 
-      if (video.readyState >= 1) {
-        initVideo();
-      } else {
-        video.addEventListener('loadedmetadata', initVideo);
-        video.addEventListener('canplay', initVideo);
-        video.addEventListener('loadeddata', initVideo);
-      }
+      // 1. Initial attempt on load: call load(), then play() and immediately pause()
+      try {
+        video.load();
+        warmupVideo();
+      } catch (e) {}
 
-      // Scroll listener mapped to 150vh sticky scrub distance
+      // 2. Video readiness listeners
+      video.addEventListener('loadedmetadata', initVideo);
+      video.addEventListener('canplay', initVideo);
+      video.addEventListener('loadeddata', initVideo);
+
+      // 3. Fallback to avatar.jpg if video errors or cannot load
+      video.addEventListener('error', showFallback);
+      setTimeout(() => {
+        if (!isVideoReady && video.readyState === 0) {
+          showFallback();
+        }
+      }, 4000);
+
+      // 4. Backup unlock on first user interaction (touchstart or scroll)
+      const touchEvents = ['touchstart', 'scroll', 'pointerdown'];
+      function onFirstInteraction() {
+        warmupVideo();
+        touchEvents.forEach(evt => window.removeEventListener(evt, onFirstInteraction, { passive: true }));
+      }
+      touchEvents.forEach(evt => window.addEventListener(evt, onFirstInteraction, { passive: true, once: true }));
+
+      // Scroll listener mapped to 80vh sticky scrub distance
       function onScroll() {
-        if (!isVideoReady || !video.duration || !heroTrack) return;
+        if (!heroTrack) return;
 
         const rect = heroTrack.getBoundingClientRect();
-        const scrubDistance = heroTrack.offsetHeight - window.innerHeight; // Exactly 150vh
+        const scrubDistance = heroTrack.offsetHeight - window.innerHeight; // Exactly 80vh
         if (scrubDistance <= 0) return;
 
         const scrolled = -rect.top;
